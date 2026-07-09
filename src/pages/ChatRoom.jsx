@@ -3,9 +3,11 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import useStore from '../store'
 import imageCompression from 'browser-image-compression'
-import { Send, User, ChevronLeft, Paperclip, X, File, Image as ImageIcon } from 'lucide-react'
+import { Send, User, ChevronLeft, Paperclip, X, File, Bookmark, Check, CheckCheck, Smile } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 export default function ChatRoom() {
+  const { t } = useTranslation()
   const { chatId } = useParams()
   const navigate = useNavigate()
   const { profile } = useStore()
@@ -15,6 +17,8 @@ export default function ChatRoom() {
   const [chatInfo, setChatInfo] = useState(null)
   const [attachment, setAttachment] = useState(null)
   const [uploading, setUploading] = useState(false)
+  const [hoveredMsgId, setHoveredMsgId] = useState(null)
+  
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -32,13 +36,24 @@ export default function ChatRoom() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
         async (payload) => {
-          // Загружаем инфу об авторе для нового сообщения
           const { data: authorData } = await supabase.from('profiles').select('display_name, avatar_url').eq('id', payload.new.user_id).single()
           
           setMessages((prev) => {
             if (prev.some(msg => msg.id === payload.new.id)) return prev
             return [...prev, { ...payload.new, profiles: authorData }]
           })
+          
+          // Если пришло сообщение от другого, помечаем прочитанным
+          if (payload.new.user_id !== profile.id) {
+            markAsRead(payload.new.id, payload.new.read_by || [])
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
+        (payload) => {
+          setMessages(prev => prev.map(msg => msg.id === payload.new.id ? { ...msg, ...payload.new } : msg))
         }
       )
       .subscribe()
@@ -52,18 +67,19 @@ export default function ChatRoom() {
 
   const loadChatInfo = async () => {
     const { data: chatData } = await supabase.from('chats').select('*').eq('id', chatId).single()
-    
+    if (!chatData) return
+
     if (chatData.type === 'direct') {
       const { data: participants } = await supabase
         .from('chat_participants')
         .select('user_id, profiles(id, display_name, avatar_url)')
         .eq('chat_id', chatId)
       
-      const otherUser = participants.find(p => p.user_id !== profile.id)
+      const otherUser = participants?.find(p => p.user_id !== profile.id)
       if (otherUser) {
         setChatInfo({ isDirect: true, ...otherUser.profiles })
       } else {
-        setChatInfo({ isDirect: true, isSaved: true, display_name: 'Избранное', id: profile.id })
+        setChatInfo({ isDirect: true, isSaved: true, display_name: t('saved_messages', 'Избранное'), id: profile.id })
       }
     } else {
       setChatInfo({ isDirect: false, ...chatData })
@@ -78,7 +94,45 @@ export default function ChatRoom() {
       .order('created_at', { ascending: true })
       .limit(100)
     
-    if (data) setMessages(data)
+    if (data) {
+      setMessages(data)
+      
+      // Помечаем чужие непрочитанные сообщения как прочитанные
+      const unreadIds = data
+        .filter(m => m.user_id !== profile.id && !(m.read_by || []).includes(profile.id))
+        .map(m => m.id)
+        
+      if (unreadIds.length > 0) {
+        // Простой апдейт (в реальности лучше RPC, но для начала так сойдет)
+        unreadIds.forEach(id => {
+          const msg = data.find(m => m.id === id)
+          markAsRead(id, msg.read_by || [])
+        })
+      }
+    }
+  }
+
+  const markAsRead = async (msgId, currentReadBy) => {
+    if (currentReadBy.includes(profile.id)) return
+    const newReadBy = [...currentReadBy, profile.id]
+    await supabase.from('messages').update({ read_by: newReadBy }).eq('id', msgId)
+  }
+
+  const toggleReaction = async (msg, emoji) => {
+    const currentReactions = msg.reactions || {}
+    let newReactions = { ...currentReactions }
+    
+    if (newReactions[profile.id] === emoji) {
+      delete newReactions[profile.id] // Убираем реакцию, если нажали на ту же
+    } else {
+      newReactions[profile.id] = emoji
+    }
+
+    // Оптимистично обновляем UI
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, reactions: newReactions } : m))
+    setHoveredMsgId(null)
+    
+    await supabase.from('messages').update({ reactions: newReactions }).eq('id', msg.id)
   }
 
   const handleFileChange = async (e) => {
@@ -86,7 +140,7 @@ export default function ChatRoom() {
     if (!file) return
     
     if (file.size > 5 * 1024 * 1024) {
-      alert('Файл слишком большой! Лимит 5 МБ.')
+      alert(t('file_too_large', 'Файл слишком большой! Лимит 5 МБ.'))
       return
     }
     
@@ -98,7 +152,7 @@ export default function ChatRoom() {
         setUploading(true)
         processedFile = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1200 })
       } catch (err) {
-        console.error('Ошибка сжатия', err)
+        console.error('Compression error', err)
       } finally {
         setUploading(false)
       }
@@ -131,22 +185,50 @@ export default function ChatRoom() {
       text: newMessage || (attachment ? '' : ' '),
       attachment_url: uploadedUrl,
       attachment_type: attachment ? attachment.type : null,
-      attachment_name: attachment ? attachment.name : null
+      attachment_name: attachment ? attachment.name : null,
+      read_by: [],
+      reactions: {}
     }
 
-    const { error } = await supabase.from('messages').insert([msgData])
-    if (error) {
-      alert('Ошибка отправки: ' + error.message)
-    } else {
-      setNewMessage('')
-      setAttachment(null)
-    }
+    // Оптимистичный UI
+    const tempId = Date.now()
+    const tempMsg = { ...msgData, id: tempId, created_at: new Date().toISOString(), profiles: profile }
+    setMessages(prev => [...prev, tempMsg])
+    
+    setNewMessage('')
+    setAttachment(null)
     setUploading(false)
+
+    const { error, data } = await supabase.from('messages').insert([msgData]).select().single()
+    if (error) {
+      alert(t('error_sending', 'Ошибка отправки: ') + error.message)
+      setMessages(prev => prev.filter(m => m.id !== tempId)) // Удаляем если ошибка
+    } else {
+      // Заменяем временный id на настоящий (чтобы работали реакции)
+      setMessages(prev => prev.map(m => m.id === tempId ? { ...m, id: data.id } : m))
+    }
   }
 
-  if (!chatInfo) return <div style={{ padding: '24px' }}>Загрузка чата...</div>
+  if (!chatInfo) return <div style={{ padding: '24px' }}>{t('loading', 'Загрузка...')}</div>
 
   const canWrite = chatInfo.type !== 'channel' || chatInfo.admin_id === profile.id
+
+  const renderReactions = (reactions) => {
+    if (!reactions || Object.keys(reactions).length === 0) return null
+    const counts = {}
+    Object.values(reactions).forEach(emoji => { counts[emoji] = (counts[emoji] || 0) + 1 })
+    
+    return (
+      <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+        {Object.entries(counts).map(([emoji, count]) => (
+          <div key={emoji} style={{ background: 'var(--bg-primary)', padding: '2px 6px', borderRadius: '12px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px', border: '1px solid var(--border-color)', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
+            <span>{emoji}</span>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{count}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <>
@@ -165,13 +247,13 @@ export default function ChatRoom() {
           )}
           
           <div>
-            <strong style={{ fontSize: '1.1rem', display: 'block' }}>{chatInfo.display_name || chatInfo.name}</strong>
-            {!chatInfo.isDirect && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{chatInfo.type === 'channel' ? 'Канал' : 'Группа'}</span>}
+            <strong style={{ fontSize: '1.1rem', display: 'block', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatInfo.display_name || chatInfo.name}</strong>
+            {!chatInfo.isDirect && <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{chatInfo.type === 'channel' ? t('channel', 'Канал') : t('group', 'Группа')}</span>}
           </div>
         </div>
         
         {chatInfo.isDirect && !chatInfo.isSaved && (
-          <Link to={`/profile/${chatInfo.id}`} className="btn-icon ripple" title="Профиль">
+          <Link to={`/profile/${chatInfo.id}`} className="btn-icon ripple" title={t('profile', 'Профиль')}>
             <User size={20} />
           </Link>
         )}
@@ -180,16 +262,23 @@ export default function ChatRoom() {
       <div className="messages-wrapper">
         {messages.length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '40px' }}>
-            {chatInfo.isSaved ? 'Здесь вы можете сохранять ссылки, файлы и заметки.' : 'Здесь пока нет сообщений.'}
+            {chatInfo.isSaved ? t('saved_messages_empty', 'Здесь вы можете сохранять ссылки, файлы и заметки.') : t('no_messages', 'Здесь пока нет сообщений.')}
           </div>
         ) : (
           messages.map((msg, index) => {
             const isMine = msg.user_id === profile.id
             const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             const showAuthor = !isMine && !chatInfo.isDirect && (index === 0 || messages[index - 1].user_id !== msg.user_id)
+            const isRead = (msg.read_by || []).length > 0
             
             return (
-              <div key={msg.id} className={`bubble ${isMine ? 'mine' : 'other'}`}>
+              <div 
+                key={msg.id} 
+                className={`bubble ${isMine ? 'mine' : 'other'}`}
+                onMouseEnter={() => setHoveredMsgId(msg.id)}
+                onMouseLeave={() => setHoveredMsgId(null)}
+                style={{ position: 'relative' }}
+              >
                 {showAuthor && <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px', fontWeight: 'bold' }}>{msg.profiles?.display_name}</div>}
                 
                 {msg.attachment_url && (
@@ -206,9 +295,27 @@ export default function ChatRoom() {
                 
                 {msg.text && <div>{msg.text}</div>}
                 
-                <div style={{ fontSize: '0.65rem', marginTop: '4px', textAlign: 'right', opacity: 0.7 }}>
-                  {time}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                  <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{time}</div>
+                  {isMine && !chatInfo.isSaved && (
+                    <div style={{ color: isRead ? '#3b82f6' : 'inherit', opacity: isRead ? 1 : 0.6, display: 'flex' }}>
+                      {isRead ? <CheckCheck size={14} /> : <Check size={14} />}
+                    </div>
+                  )}
                 </div>
+
+                {renderReactions(msg.reactions)}
+
+                {/* Reaction Picker Popup */}
+                {hoveredMsgId === msg.id && (
+                  <div style={{ position: 'absolute', top: '-35px', [isMine ? 'right' : 'left']: '0', background: 'var(--bg-glass)', backdropFilter: 'blur(10px)', padding: '4px 8px', borderRadius: '20px', display: 'flex', gap: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', zIndex: 10 }}>
+                    {['👍', '❤️', '😂', '😢', '🔥'].map(emoji => (
+                      <button key={emoji} className="btn-icon ripple" style={{ padding: '4px', fontSize: '1.2rem', width: 'auto', height: 'auto' }} onClick={() => toggleReaction(msg, emoji)}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )
           })
@@ -233,7 +340,7 @@ export default function ChatRoom() {
           
           <textarea
             className="message-input"
-            placeholder={uploading ? "Загрузка файла..." : "Напишите сообщение..."}
+            placeholder={uploading ? t('uploading', 'Загрузка файла...') : t('type_message', 'Напишите сообщение...')}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
@@ -247,7 +354,7 @@ export default function ChatRoom() {
         </form>
       ) : (
         <div className="input-area" style={{ justifyContent: 'center', color: 'var(--text-secondary)' }}>
-          Только администраторы могут писать в этот канал.
+          {t('channel_readonly', 'Только администраторы могут писать в этот канал.')}
         </div>
       )}
     </>

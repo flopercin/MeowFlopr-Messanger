@@ -44,7 +44,7 @@
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -57,7 +57,7 @@ body {
 
 #root {
   width: 100vw;
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -66,7 +66,7 @@ body {
 /* Base App Container */
 .app-container {
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   display: flex;
   background: var(--bg-glass);
   backdrop-filter: blur(20px);
@@ -79,7 +79,7 @@ body {
 @media (min-width: 768px) {
   .app-container {
     max-width: 1200px;
-    height: 90vh;
+    height: 90dvh;
     border-radius: 24px;
     margin: 20px;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
@@ -138,27 +138,13 @@ body {
   .mobile-show-main .sidebar { transform: none; }
 }
 
-/* Ripple Effect */
+/* Ripple Effect (Scale down) */
 .ripple {
-  position: relative;
-  overflow: hidden;
+  transition: transform 0.15s ease, background-color 0.2s ease, filter 0.2s ease;
 }
-.ripple::after {
-  content: '';
-  position: absolute;
-  top: 50%; left: 50%;
-  width: 100%; padding-top: 100%;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 50%;
-  transform: translate(-50%, -50%) scale(0);
-  opacity: 0;
-  transition: transform 0.4s, opacity 0.4s;
-  pointer-events: none;
-}
-.ripple:active::after {
-  transform: translate(-50%, -50%) scale(2);
-  opacity: 1;
-  transition: 0s;
+.ripple:active {
+  transform: scale(0.96) !important;
+  filter: brightness(0.9);
 }
 
 /* Shared UI */

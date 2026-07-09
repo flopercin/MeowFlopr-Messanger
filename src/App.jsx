@@ -8,15 +8,18 @@ import ChatRoom from './pages/ChatRoom'
 import Profile from './pages/Profile'
 import Settings from './pages/Settings'
 
+import { useTranslation } from 'react-i18next'
+
 const TITLES = ["Meow", "MeowFlopr", "flopercin?", "67", "92", "ура робло", "Мр", "мяу", "кошка", "дыня", "melon", "MeowMeowMeow"]
 
 function EmptyState() {
-  const [title, setTitle] = useState(TITLES[Math.floor(Math.random() * TITLES.length)])
+  const { t } = useTranslation()
+  const [title] = useState(TITLES[Math.floor(Math.random() * TITLES.length)])
   
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: 'var(--text-secondary)' }}>
       <h2 style={{ fontSize: '2.5rem', color: 'var(--accent)', marginBottom: '16px', opacity: 0.8 }}>{title}</h2>
-      <p>Выберите чат или найдите кого-нибудь в поиске</p>
+      <p>{t('select_chat_or_search', 'Выберите чат или найдите кого-нибудь в поиске')}</p>
     </div>
   )
 }

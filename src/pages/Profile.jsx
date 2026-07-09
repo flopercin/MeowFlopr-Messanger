@@ -1,241 +1,164 @@
-import React, { useEffect, useState, useRef } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import useStore from '../store'
 import imageCompression from 'browser-image-compression'
-import { Camera, Save, X } from 'lucide-react'
+import { Edit2, Save, ChevronLeft, Camera } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 export default function Profile() {
+  const { t } = useTranslation()
   const { userId } = useParams()
-  const { profile: currentUserProfile, setProfile: setCurrentUserProfile } = useStore()
-  const [viewedProfile, setViewedProfile] = useState(null)
-  const [isEditing, setIsEditing] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const fileInputRef = useRef(null)
   const navigate = useNavigate()
+  const { profile: currentUserProfile, setProfile: setCurrentUserProfile } = useStore()
+  
+  const [profileData, setProfileData] = useState(null)
+  const [isEditing, setIsEditing] = useState(false)
+  
+  const [editForm, setEditForm] = useState({
+    display_name: '',
+    username: '',
+    description: ''
+  })
+  
+  const [uploading, setUploading] = useState(false)
 
-  // Форма редактирования
-  const [displayName, setDisplayName] = useState('')
-  const [username, setUsername] = useState('')
-  const [avatarUrl, setAvatarUrl] = useState('')
-
-  const isMyProfile = currentUserProfile?.id === userId
+  const isMe = currentUserProfile?.id === userId
 
   useEffect(() => {
     loadProfile()
   }, [userId])
 
   const loadProfile = async () => {
-    setLoading(true)
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single()
-
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
     if (data) {
-      setViewedProfile(data)
-      setDisplayName(data.display_name || '')
-      setUsername(data.username || '')
-      setAvatarUrl(data.avatar_url || '')
-    }
-    setLoading(false)
-  }
-
-  const handleAvatarChange = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    try {
-      setSaving(true)
-      
-      // Сжатие картинки
-      const options = {
-        maxSizeMB: 0.2, // Максимум 200KB
-        maxWidthOrHeight: 500,
-        useWebWorker: true
-      }
-      const compressedFile = await imageCompression(file, options)
-      
-      // Загрузка в Supabase Storage
-      const fileExt = compressedFile.name.split('.').pop()
-      const fileName = `${userId}-${Date.now()}.${fileExt}`
-      const filePath = `avatars/${fileName}`
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, compressedFile)
-
-      if (uploadError) throw uploadError
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath)
-
-      setAvatarUrl(publicUrl)
-      
-      // Сразу сохраняем в базу
-      await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', userId)
-      if (isMyProfile) {
-        setCurrentUserProfile({ ...currentUserProfile, avatar_url: publicUrl })
-      }
-    } catch (err) {
-      alert('Ошибка при загрузке аватарки: ' + err.message)
-    } finally {
-      setSaving(false)
+      setProfileData(data)
+      setEditForm({
+        display_name: data.display_name || '',
+        username: data.username || '',
+        description: data.description || ''
+      })
     }
   }
 
   const handleSave = async () => {
-    if (username.length < 3) {
-      alert('Username должен быть не короче 3 символов')
+    if (!editForm.username.trim() || !editForm.display_name.trim()) {
+      alert(t('fill_required', 'Имя и Юзернейм обязательны!'))
       return
     }
 
-    setSaving(true)
-    const updates = {
-      display_name: displayName,
-      username: username.toLowerCase()
-    }
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          display_name: editForm.display_name.trim(),
+          username: editForm.username.trim().toLowerCase(),
+          description: editForm.description.trim()
+        })
+        .eq('id', userId)
 
-    const { error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', userId)
-
-    if (error) {
-      alert('Ошибка сохранения: возможно такой username уже занят')
-    } else {
-      setViewedProfile({ ...viewedProfile, ...updates })
-      if (isMyProfile) {
-        setCurrentUserProfile({ ...currentUserProfile, ...updates })
+      if (error) {
+        if (error.code === '23505') throw new Error(t('username_taken', 'Этот username уже занят!'))
+        throw error
       }
+
+      setProfileData({ ...profileData, ...editForm })
+      if (isMe) setCurrentUserProfile({ ...currentUserProfile, ...editForm })
       setIsEditing(false)
-    }
-    setSaving(false)
-  }
-
-  const handleMessageUser = async () => {
-    // Начинаем чат
-    const { data: participants } = await supabase
-      .from('chat_participants')
-      .select('chat_id')
-      .eq('user_id', currentUserProfile.id)
-
-    const chatIds = participants?.map(p => p.chat_id) || []
-    
-    // Ищем, есть ли уже чат с этим пользователем
-    const { data: sharedChats } = await supabase
-      .from('chat_participants')
-      .select('chat_id')
-      .in('chat_id', chatIds)
-      .eq('user_id', userId)
-
-    if (sharedChats && sharedChats.length > 0) {
-      navigate(`/chat/${sharedChats[0].chat_id}`)
-    } else {
-      // Создаем новый
-      const { data: newChat } = await supabase.from('chats').insert([{}]).select().single()
-      if (newChat) {
-        await supabase.from('chat_participants').insert([
-          { chat_id: newChat.id, user_id: currentUserProfile.id },
-          { chat_id: newChat.id, user_id: userId }
-        ])
-        navigate(`/chat/${newChat.id}`)
-      }
+    } catch (err) {
+      alert(err.message)
     }
   }
 
-  if (loading) return <div style={{ padding: '40px', textAlign: 'center' }}>Загрузка профиля...</div>
-  if (!viewedProfile) return <div style={{ padding: '40px', textAlign: 'center' }}>Пользователь не найден</div>
+  const handleAvatarChange = async (e) => {
+    if (!isMe) return
+    const file = e.target.files[0]
+    if (!file) return
 
-  const currentAvatar = isEditing ? avatarUrl : viewedProfile.avatar_url
-  const defaultAvatar = `https://ui-avatars.com/api/?name=${viewedProfile.display_name || viewedProfile.username}&size=200`
+    try {
+      setUploading(true)
+      const compressedFile = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 800 })
+      
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${userId}/${Date.now()}.${fileExt}`
+
+      const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, compressedFile)
+      if (uploadError) throw uploadError
+
+      const { data } = supabase.storage.from('avatars').getPublicUrl(fileName)
+      
+      await supabase.from('profiles').update({ avatar_url: data.publicUrl }).eq('id', userId)
+      
+      setProfileData({ ...profileData, avatar_url: data.publicUrl })
+      setCurrentUserProfile({ ...currentUserProfile, avatar_url: data.publicUrl })
+
+    } catch (err) {
+      alert(t('avatar_error', 'Ошибка загрузки аватара: ') + err.message)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  if (!profileData) return <div style={{ padding: '24px' }}>{t('loading', 'Загрузка...')}</div>
 
   return (
-    <div className="center-card" style={{ marginTop: '40px' }}>
-      <div style={{ position: 'relative', width: '120px', margin: '0 auto 24px' }}>
-        <img 
-          src={currentAvatar || defaultAvatar} 
-          alt="Avatar" 
-          className="avatar avatar-lg"
-          style={{ width: '120px', height: '120px' }}
-        />
-        {isEditing && (
-          <>
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="btn-icon"
-              style={{ position: 'absolute', bottom: '0', right: '0', background: 'var(--accent)', color: 'white' }}
-            >
-              <Camera size={18} />
-            </button>
-            <input 
-              type="file" 
-              accept="image/*" 
-              ref={fileInputRef} 
-              style={{ display: 'none' }} 
-              onChange={handleAvatarChange}
-            />
-          </>
+    <div style={{ maxWidth: '600px', margin: '0 auto', width: '100%', height: '100dvh', overflowY: 'auto' }}>
+      <div className="topbar" style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--bg-glass)', backdropFilter: 'blur(20px)' }}>
+        <button className="btn-icon ripple" onClick={() => navigate(-1)} style={{ marginLeft: '-10px' }}>
+          <ChevronLeft size={24} />
+        </button>
+        <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{t('profile', 'Профиль')}</div>
+        {isMe && (
+          <button className="btn-icon ripple" onClick={() => isEditing ? handleSave() : setIsEditing(true)}>
+            {isEditing ? <Save size={20} color="#10b981" /> : <Edit2 size={20} />}
+          </button>
         )}
       </div>
 
-      {!isEditing ? (
-        <>
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '4px' }}>{viewedProfile.display_name}</h2>
-          <div style={{ color: 'var(--accent)', fontWeight: '600', marginBottom: '8px' }}>@{viewedProfile.username}</div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '32px' }}>
-            ID Пользователя: {viewedProfile.numeric_id}
-          </div>
+      <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        <div style={{ position: 'relative', marginBottom: '24px' }}>
+          <img 
+            src={profileData.avatar_url || `https://ui-avatars.com/api/?name=${profileData.display_name}&size=150`} 
+            style={{ width: '150px', height: '150px', borderRadius: '50%', objectFit: 'cover', border: '4px solid var(--border-color)', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}
+            alt="Avatar"
+          />
+          {isMe && isEditing && (
+            <label style={{ position: 'absolute', bottom: '0', right: '0', background: 'var(--accent)', color: 'white', width: '40px', height: '40px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
+              {uploading ? <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px' }}/> : <Camera size={20} />}
+              <input type="file" style={{ display: 'none' }} accept="image/*" onChange={handleAvatarChange} disabled={uploading} />
+            </label>
+          )}
+        </div>
 
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-            {isMyProfile ? (
-              <button className="btn btn-primary" onClick={() => setIsEditing(true)}>
-                Редактировать профиль
-              </button>
+        <div style={{ width: '100%', background: 'var(--bg-secondary)', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 6px rgba(0,0,0,0.05)' }}>
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>{t('name', 'Имя')}</div>
+            {isEditing ? (
+              <input type="text" className="input-field" value={editForm.display_name} onChange={e => setEditForm({...editForm, display_name: e.target.value})} />
             ) : (
-              <button className="btn btn-primary" onClick={handleMessageUser}>
-                Написать сообщение
-              </button>
+              <div style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{profileData.display_name}</div>
             )}
           </div>
-        </>
-      ) : (
-        <div style={{ textAlign: 'left' }}>
+
           <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Отображаемое имя</label>
-            <input 
-              type="text" 
-              className="input-field" 
-              value={displayName} 
-              onChange={(e) => setDisplayName(e.target.value)} 
-            />
-          </div>
-          
-          <div style={{ marginBottom: '24px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '6px' }}>Username (уникальный)</label>
-            <input 
-              type="text" 
-              className="input-field" 
-              value={username} 
-              onChange={(e) => setUsername(e.target.value)} 
-            />
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>{t('username_id', 'Юзернейм и ID')}</div>
+            {isEditing ? (
+              <input type="text" className="input-field" value={editForm.username} onChange={e => setEditForm({...editForm, username: e.target.value})} />
+            ) : (
+              <div style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>@{profileData.username} <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>#{profileData.numeric_id}</span></div>
+            )}
           </div>
 
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <button className="btn" style={{ flex: 1, background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }} onClick={() => setIsEditing(false)} disabled={saving}>
-              <X size={18} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-              Отмена
-            </button>
-            <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSave} disabled={saving}>
-              <Save size={18} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-              {saving ? 'Сохранение...' : 'Сохранить'}
-            </button>
+          <div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>{t('about', 'О себе')}</div>
+            {isEditing ? (
+              <textarea className="input-field" value={editForm.description} onChange={e => setEditForm({...editForm, description: e.target.value})} rows={3} placeholder={t('about_placeholder', 'Напишите что-нибудь о себе...')} />
+            ) : (
+              <div style={{ fontSize: '1rem', whiteSpace: 'pre-wrap' }}>{profileData.description || <span style={{ opacity: 0.5 }}>{t('no_description', 'Ничего не указано')}</span>}</div>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }

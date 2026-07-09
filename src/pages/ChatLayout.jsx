@@ -2,10 +2,12 @@ import React, { useEffect, useState } from 'react'
 import { Outlet, useNavigate, Link, useLocation } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import useStore from '../store'
-import { Search, Settings, LogOut, Users, Plus, Bookmark } from 'lucide-react'
+import { Search, Settings, Users, Plus, Bookmark, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 export default function ChatLayout() {
-  const { session, profile, setSession } = useStore()
+  const { t } = useTranslation()
+  const { session, profile } = useStore()
   const navigate = useNavigate()
   const location = useLocation()
   
@@ -13,71 +15,80 @@ export default function ChatLayout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [showGroupModal, setShowGroupModal] = useState(false)
+  
+  // Group creation state
   const [groupName, setGroupName] = useState('')
+  const [groupUsername, setGroupUsername] = useState('')
   const [groupType, setGroupType] = useState('group')
+  const [creationError, setCreationError] = useState('')
 
   const isMobileMainView = location.pathname !== '/'
 
   useEffect(() => {
     if (profile) loadChats()
-  }, [profile, location.pathname]) // Reload chats when navigating back to list
+  }, [profile, location.pathname])
 
   const loadChats = async () => {
-    const { data: participants } = await supabase
-      .from('chat_participants')
-      .select('chat_id, chats(id, type, name, avatar_url, updated_at)')
-      .eq('user_id', profile.id)
+    try {
+      const { data: participants, error: pError } = await supabase
+        .from('chat_participants')
+        .select('chat_id, chats(id, type, name, avatar_url, updated_at, username)')
+        .eq('user_id', profile.id)
 
-    if (!participants || participants.length === 0) {
-      setChats([])
-      return
-    }
+      if (pError) throw pError
+      if (!participants || participants.length === 0) {
+        setChats([])
+        return
+      }
 
-    const chatIds = participants.map(p => p.chat_id)
+      const chatIds = participants.map(p => p.chat_id)
+      const { data: allParticipants } = await supabase
+        .from('chat_participants')
+        .select('chat_id, user_id, profiles(display_name, username, avatar_url)')
+        .in('chat_id', chatIds)
 
-    // Для direct чатов нужно найти второго участника.
-    const { data: allParticipants } = await supabase
-      .from('chat_participants')
-      .select('chat_id, user_id, profiles(display_name, username, avatar_url)')
-      .in('chat_id', chatIds)
-
-    const formattedChats = participants.map(p => {
-      const chatInfo = p.chats
-      if (!chatInfo) return null
-      
-      if (chatInfo.type === 'direct') {
-        const otherUser = allParticipants.find(ap => ap.chat_id === chatInfo.id && ap.user_id !== profile.id)
-        if (otherUser) {
-          return {
-            id: chatInfo.id,
-            name: otherUser.profiles.display_name,
-            username: otherUser.profiles.username,
-            avatar: otherUser.profiles.avatar_url,
-            isDirect: true
+      const formattedChats = participants.map(p => {
+        const chatInfo = p.chats
+        if (!chatInfo) return null
+        
+        if (chatInfo.type === 'direct') {
+          const otherUser = allParticipants?.find(ap => ap.chat_id === chatInfo.id && ap.user_id !== profile.id)
+          if (otherUser) {
+            return {
+              id: chatInfo.id,
+              name: otherUser.profiles?.display_name || 'User',
+              username: otherUser.profiles?.username,
+              avatar: otherUser.profiles?.avatar_url,
+              isDirect: true,
+              updated_at: chatInfo.updated_at
+            }
+          } else {
+            return {
+              id: chatInfo.id,
+              name: t('saved_messages', 'Избранное'),
+              username: 'saved',
+              avatar: null,
+              isDirect: true,
+              isSaved: true,
+              updated_at: chatInfo.updated_at
+            }
           }
         } else {
-          // Чат с самим собой
           return {
             id: chatInfo.id,
-            name: 'Избранное',
-            username: 'saved',
-            avatar: null,
-            isDirect: true,
-            isSaved: true
+            name: chatInfo.name || (chatInfo.type === 'channel' ? t('channel', 'Канал') : t('group', 'Группа')),
+            username: chatInfo.username ? `@${chatInfo.username}` : chatInfo.type,
+            avatar: chatInfo.avatar_url,
+            isDirect: false,
+            updated_at: chatInfo.updated_at
           }
         }
-      } else {
-        return {
-          id: chatInfo.id,
-          name: chatInfo.name || (chatInfo.type === 'channel' ? 'Канал' : 'Группа'),
-          username: chatInfo.type,
-          avatar: chatInfo.avatar_url,
-          isDirect: false
-        }
-      }
-    }).filter(Boolean)
+      }).filter(Boolean).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
 
-    setChats(formattedChats)
+      setChats(formattedChats)
+    } catch (err) {
+      console.error("Error loading chats:", err)
+    }
   }
 
   const handleSearch = async (e) => {
@@ -95,21 +106,18 @@ export default function ChatLayout() {
 
   const startDirectChat = async (otherUserId) => {
     try {
-      // Ищем уже существующий общий чат (ручной поиск вместо RPC)
       const { data: myChats } = await supabase.from('chat_participants').select('chat_id').eq('user_id', profile.id)
       const myChatIds = myChats?.map(c => c.chat_id) || []
       
       let existingChatId = null
       
       if (myChatIds.length > 0) {
-        // Ищем, есть ли в этих чатах другой пользователь (или только мы, если избранное)
         const { data: shared } = await supabase.from('chat_participants')
           .select('chat_id')
           .in('chat_id', myChatIds)
           .eq('user_id', otherUserId)
           
         if (shared && shared.length > 0) {
-          // Убедимся, что это direct чат
           const { data: chatDetails } = await supabase.from('chats')
             .select('id')
             .in('id', shared.map(s => s.chat_id))
@@ -128,63 +136,79 @@ export default function ChatLayout() {
         return
       }
 
-      // Если нет - создаем новый
-      const { data: newChat, error: chatError } = await supabase.from('chats').insert([{ type: 'direct' }]).select().single()
+      // Генерация ID на клиенте обходит ошибку RLS
+      const newId = crypto.randomUUID()
+      
+      const { error: chatError } = await supabase.from('chats').insert([{ id: newId, type: 'direct' }])
       if (chatError) throw chatError
 
-      if (newChat) {
-        const participants = [{ chat_id: newChat.id, user_id: profile.id }]
-        if (profile.id !== otherUserId) {
-          participants.push({ chat_id: newChat.id, user_id: otherUserId })
-        }
-        
-        const { error: partError } = await supabase.from('chat_participants').insert(participants)
-        if (partError) throw partError
-
-        navigate(`/chat/${newChat.id}`)
-        setSearchQuery('')
-        setSearchResults([])
+      const participants = [{ chat_id: newId, user_id: profile.id }]
+      if (profile.id !== otherUserId) {
+        participants.push({ chat_id: newId, user_id: otherUserId })
       }
+      
+      const { error: partError } = await supabase.from('chat_participants').insert(participants)
+      if (partError) throw partError
+
+      navigate(`/chat/${newId}`)
+      setSearchQuery('')
+      setSearchResults([])
+      loadChats()
     } catch (error) {
       console.error(error)
-      alert('Ошибка при создании чата: ' + error.message)
+      alert(t('error', 'Ошибка: ') + error.message)
     }
+  }
+
+  const checkLimits = async () => {
+    const { count } = await supabase
+      .from('chats')
+      .select('*', { count: 'exact', head: true })
+      .eq('admin_id', profile.id)
+      .eq('type', groupType)
+      
+    return count >= 2
   }
 
   const createGroup = async (e) => {
     e.preventDefault()
+    setCreationError('')
     if (!groupName.trim()) return
 
     try {
-      const { data: newChat, error: chatError } = await supabase
-        .from('chats')
-        .insert([{ type: groupType, name: groupName, admin_id: profile.id }])
-        .select()
-        .single()
-        
-      if (chatError) throw chatError
-
-      if (newChat) {
-        await supabase.from('chat_participants').insert([{ chat_id: newChat.id, user_id: profile.id }])
-        setShowGroupModal(false)
-        setGroupName('')
-        loadChats()
-        navigate(`/chat/${newChat.id}`)
+      const limitReached = await checkLimits()
+      if (limitReached) {
+        setCreationError(t('limit_reached', 'Лимит: максимум 2 группы и 2 канала на аккаунт.'))
+        return
       }
-    } catch (error) {
-      alert('Ошибка создания группы: ' + error.message)
-    }
-  }
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    setSession(null)
-    navigate('/')
+      const newId = crypto.randomUUID()
+      const chatData = { id: newId, type: groupType, name: groupName, admin_id: profile.id }
+      if (groupUsername.trim()) {
+        chatData.username = groupUsername.trim().toLowerCase()
+      }
+
+      const { error: chatError } = await supabase.from('chats').insert([chatData])
+      if (chatError) {
+        if (chatError.code === '23505') throw new Error(t('username_taken', 'Этот username уже занят'))
+        throw chatError
+      }
+
+      await supabase.from('chat_participants').insert([{ chat_id: newId, user_id: profile.id }])
+      
+      setShowGroupModal(false)
+      setGroupName('')
+      setGroupUsername('')
+      loadChats()
+      navigate(`/chat/${newId}`)
+    } catch (error) {
+      setCreationError(error.message)
+    }
   }
 
   return (
     <div className={`app-container ${isMobileMainView ? 'mobile-show-main' : ''}`}>
-      <div className="sidebar">
+      <div className="sidebar" style={{ position: 'relative' }}>
         <div className="sidebar-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Link to={`/profile/${profile?.id}`} className="ripple" style={{ borderRadius: '50%' }}>
@@ -199,9 +223,7 @@ export default function ChatLayout() {
             </Link>
           </div>
           <div style={{ display: 'flex', gap: '4px' }}>
-            <button onClick={() => setShowGroupModal(true)} className="btn-icon ripple" title="Новая группа"><Plus size={20} /></button>
-            <Link to="/settings" className="btn-icon ripple"><Settings size={20} /></Link>
-            <button onClick={handleLogout} className="btn-icon ripple" title="Выйти"><LogOut size={20} /></button>
+            <Link to={location.pathname === '/settings' ? '/' : '/settings'} className="btn-icon ripple"><Settings size={20} /></Link>
           </div>
         </div>
 
@@ -209,7 +231,7 @@ export default function ChatLayout() {
           <form onSubmit={handleSearch} style={{ display: 'flex', gap: '8px' }}>
             <input
               type="text"
-              placeholder="Поиск ID или username..."
+              placeholder={t('search_placeholder', 'Поиск ID или username...')}
               className="message-input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -222,12 +244,12 @@ export default function ChatLayout() {
           
           {searchResults.length > 0 && (
             <div style={{ marginTop: '10px', background: 'var(--bg-glass)', borderRadius: '12px', padding: '8px' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '8px', paddingLeft: '8px' }}>Поиск:</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '8px', paddingLeft: '8px' }}>{t('search', 'Поиск')}:</div>
               {searchResults.map(user => (
                 <div key={user.id} className="chat-item ripple" style={{ padding: '8px', borderRadius: '8px' }} onClick={() => startDirectChat(user.id)}>
                   <img src={user.avatar_url || `https://ui-avatars.com/api/?name=${user.display_name}`} className="avatar avatar-sm" />
                   <div>
-                    <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{user.display_name} {user.id === profile.id ? '(Вы)' : ''}</div>
+                    <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>{user.display_name} {user.id === profile.id ? t('you', '(Вы)') : ''}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>@{user.username}</div>
                   </div>
                 </div>
@@ -236,14 +258,13 @@ export default function ChatLayout() {
           )}
         </div>
 
-        <div className="chat-list">
+        <div className="chat-list" style={{ flex: 1, overflowY: 'auto' }}>
           <div className="chat-item ripple" onClick={() => startDirectChat(profile.id)}>
              <div className="avatar avatar-sm" style={{ display:'flex', alignItems:'center', justifyContent:'center', background:'var(--accent)' }}>
                <Bookmark size={20} color="white" />
              </div>
              <div>
-               <div style={{ fontWeight: '600' }}>Избранное</div>
-               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Сохраненные сообщения</div>
+               <div style={{ fontWeight: '600' }}>{t('saved_messages', 'Избранное')}</div>
              </div>
           </div>
           {chats.map(chat => (
@@ -260,12 +281,20 @@ export default function ChatLayout() {
                 </div>
               )}
               <div>
-                <div style={{ fontWeight: '600' }}>{chat.name}</div>
+                <div style={{ fontWeight: '600', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chat.name}</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{chat.isDirect ? `@${chat.username}` : chat.username}</div>
               </div>
             </div>
           ))}
         </div>
+
+        <button 
+          className="ripple" 
+          onClick={() => setShowGroupModal(true)} 
+          style={{ position: 'absolute', bottom: '20px', right: '20px', width: '50px', height: '50px', borderRadius: '25px', background: 'var(--accent)', color: 'white', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 15px rgba(0,0,0,0.3)', cursor: 'pointer', zIndex: 100 }}
+        >
+          <Plus size={24} />
+        </button>
       </div>
 
       <div className="main-area">
@@ -275,23 +304,33 @@ export default function ChatLayout() {
       {showGroupModal && (
         <div className="modal-overlay" onClick={() => setShowGroupModal(false)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h3 style={{ marginBottom: '16px' }}>Создать новую беседу</h3>
+            <h3 style={{ marginBottom: '16px' }}>{t('create_new_chat', 'Создать новый чат')}</h3>
             <form onSubmit={createGroup}>
               <input 
                 type="text" 
                 className="input-field" 
-                placeholder="Название" 
+                placeholder={t('name', 'Название')} 
                 value={groupName}
                 onChange={e => setGroupName(e.target.value)}
                 required
               />
+              <input 
+                type="text" 
+                className="input-field" 
+                placeholder={t('username_optional', 'Юзернейм (необязательно)')} 
+                value={groupUsername}
+                onChange={e => setGroupUsername(e.target.value)}
+              />
               <select className="input-field" value={groupType} onChange={e => setGroupType(e.target.value)}>
-                <option value="group">Группа (Пишут все)</option>
-                <option value="channel">Канал (Пишет только создатель)</option>
+                <option value="group">{t('group', 'Группа')}</option>
+                <option value="channel">{t('channel', 'Канал')}</option>
               </select>
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-                <button type="button" className="btn ripple" style={{ flex: 1, background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} onClick={() => setShowGroupModal(false)}>Отмена</button>
-                <button type="submit" className="btn btn-primary ripple" style={{ flex: 1 }}>Создать</button>
+              
+              {creationError && <div style={{ color: '#ef4444', fontSize: '0.85rem', marginTop: '10px' }}>{creationError}</div>}
+              
+              <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+                <button type="button" className="btn ripple" style={{ flex: 1, background: 'var(--bg-secondary)', color: 'var(--text-primary)' }} onClick={() => setShowGroupModal(false)}>{t('cancel', 'Отмена')}</button>
+                <button type="submit" className="btn btn-primary ripple" style={{ flex: 1 }}>{t('create', 'Создать')}</button>
               </div>
             </form>
           </div>
