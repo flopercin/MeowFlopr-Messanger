@@ -4,8 +4,6 @@ import { supabase } from '../supabaseClient'
 import useStore from '../store'
 import { Search, Settings, LogOut, Users, Plus, Bookmark } from 'lucide-react'
 
-const TITLES = ["Meow", "MeowFlopr", "flopercin?", "67", "92", "ура робло", "Мр", "мяу", "кошка", "дыня", "melon", "MeowMeowMeow"]
-
 export default function ChatLayout() {
   const { session, profile, setSession } = useStore()
   const navigate = useNavigate()
@@ -14,20 +12,11 @@ export default function ChatLayout() {
   const [chats, setChats] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
-  const [randomTitle, setRandomTitle] = useState(TITLES[0])
   const [showGroupModal, setShowGroupModal] = useState(false)
   const [groupName, setGroupName] = useState('')
   const [groupType, setGroupType] = useState('group')
 
   const isMobileMainView = location.pathname !== '/'
-
-  useEffect(() => {
-    // Рандомный заголовок каждые 10 секунд
-    const interval = setInterval(() => {
-      setRandomTitle(TITLES[Math.floor(Math.random() * TITLES.length)])
-    }, 10000)
-    return () => clearInterval(interval)
-  }, [])
 
   useEffect(() => {
     if (profile) loadChats()
@@ -46,7 +35,7 @@ export default function ChatLayout() {
 
     const chatIds = participants.map(p => p.chat_id)
 
-    // Для direct чатов нужно найти второго участника. Для групп - просто вывести группу.
+    // Для direct чатов нужно найти второго участника.
     const { data: allParticipants } = await supabase
       .from('chat_participants')
       .select('chat_id, user_id, profiles(display_name, username, avatar_url)')
@@ -54,6 +43,8 @@ export default function ChatLayout() {
 
     const formattedChats = participants.map(p => {
       const chatInfo = p.chats
+      if (!chatInfo) return null
+      
       if (chatInfo.type === 'direct') {
         const otherUser = allParticipants.find(ap => ap.chat_id === chatInfo.id && ap.user_id !== profile.id)
         if (otherUser) {
@@ -65,7 +56,7 @@ export default function ChatLayout() {
             isDirect: true
           }
         } else {
-          // Если второго участника нет, это "Избранное" (чат с самим собой)
+          // Чат с самим собой
           return {
             id: chatInfo.id,
             name: 'Избранное',
@@ -103,20 +94,60 @@ export default function ChatLayout() {
   }
 
   const startDirectChat = async (otherUserId) => {
-    // Проверяем существующий чат
-    const { data: existingChat } = await supabase.rpc('get_direct_chat', { user1: profile.id, user2: otherUserId })
-    // Для простоты здесь создадим новый, если его нет (в реальном приложении нужна RPC функция или сложный запрос)
-    
-    // Временное простое решение:
-    const { data: newChat } = await supabase.from('chats').insert([{ type: 'direct' }]).select().single()
-    if (newChat) {
-      await supabase.from('chat_participants').insert([
-        { chat_id: newChat.id, user_id: profile.id },
-        ...(profile.id !== otherUserId ? [{ chat_id: newChat.id, user_id: otherUserId }] : []) // Если ID совпадают, добавляем только один раз (Избранное)
-      ])
-      navigate(`/chat/${newChat.id}`)
-      setSearchQuery('')
-      setSearchResults([])
+    try {
+      // Ищем уже существующий общий чат (ручной поиск вместо RPC)
+      const { data: myChats } = await supabase.from('chat_participants').select('chat_id').eq('user_id', profile.id)
+      const myChatIds = myChats?.map(c => c.chat_id) || []
+      
+      let existingChatId = null
+      
+      if (myChatIds.length > 0) {
+        // Ищем, есть ли в этих чатах другой пользователь (или только мы, если избранное)
+        const { data: shared } = await supabase.from('chat_participants')
+          .select('chat_id')
+          .in('chat_id', myChatIds)
+          .eq('user_id', otherUserId)
+          
+        if (shared && shared.length > 0) {
+          // Убедимся, что это direct чат
+          const { data: chatDetails } = await supabase.from('chats')
+            .select('id')
+            .in('id', shared.map(s => s.chat_id))
+            .eq('type', 'direct')
+            
+          if (chatDetails && chatDetails.length > 0) {
+            existingChatId = chatDetails[0].id
+          }
+        }
+      }
+
+      if (existingChatId) {
+        navigate(`/chat/${existingChatId}`)
+        setSearchQuery('')
+        setSearchResults([])
+        return
+      }
+
+      // Если нет - создаем новый
+      const { data: newChat, error: chatError } = await supabase.from('chats').insert([{ type: 'direct' }]).select().single()
+      if (chatError) throw chatError
+
+      if (newChat) {
+        const participants = [{ chat_id: newChat.id, user_id: profile.id }]
+        if (profile.id !== otherUserId) {
+          participants.push({ chat_id: newChat.id, user_id: otherUserId })
+        }
+        
+        const { error: partError } = await supabase.from('chat_participants').insert(participants)
+        if (partError) throw partError
+
+        navigate(`/chat/${newChat.id}`)
+        setSearchQuery('')
+        setSearchResults([])
+      }
+    } catch (error) {
+      console.error(error)
+      alert('Ошибка при создании чата: ' + error.message)
     }
   }
 
@@ -124,18 +155,24 @@ export default function ChatLayout() {
     e.preventDefault()
     if (!groupName.trim()) return
 
-    const { data: newChat } = await supabase
-      .from('chats')
-      .insert([{ type: groupType, name: groupName, admin_id: profile.id }])
-      .select()
-      .single()
+    try {
+      const { data: newChat, error: chatError } = await supabase
+        .from('chats')
+        .insert([{ type: groupType, name: groupName, admin_id: profile.id }])
+        .select()
+        .single()
+        
+      if (chatError) throw chatError
 
-    if (newChat) {
-      await supabase.from('chat_participants').insert([{ chat_id: newChat.id, user_id: profile.id }])
-      setShowGroupModal(false)
-      setGroupName('')
-      loadChats()
-      navigate(`/chat/${newChat.id}`)
+      if (newChat) {
+        await supabase.from('chat_participants').insert([{ chat_id: newChat.id, user_id: profile.id }])
+        setShowGroupModal(false)
+        setGroupName('')
+        loadChats()
+        navigate(`/chat/${newChat.id}`)
+      }
+    } catch (error) {
+      alert('Ошибка создания группы: ' + error.message)
     }
   }
 
@@ -157,7 +194,9 @@ export default function ChatLayout() {
                 alt="My Avatar"
               />
             </Link>
-            <strong style={{ fontSize: '1.1rem', color: 'var(--accent)' }}>{randomTitle}</strong>
+            <Link to={`/profile/${profile?.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+              <strong style={{ fontSize: '1.1rem' }}>{profile?.display_name}</strong>
+            </Link>
           </div>
           <div style={{ display: 'flex', gap: '4px' }}>
             <button onClick={() => setShowGroupModal(true)} className="btn-icon ripple" title="Новая группа"><Plus size={20} /></button>

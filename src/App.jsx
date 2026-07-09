@@ -8,6 +8,19 @@ import ChatRoom from './pages/ChatRoom'
 import Profile from './pages/Profile'
 import Settings from './pages/Settings'
 
+const TITLES = ["Meow", "MeowFlopr", "flopercin?", "67", "92", "ура робло", "Мр", "мяу", "кошка", "дыня", "melon", "MeowMeowMeow"]
+
+function EmptyState() {
+  const [title, setTitle] = useState(TITLES[Math.floor(Math.random() * TITLES.length)])
+  
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: 'var(--text-secondary)' }}>
+      <h2 style={{ fontSize: '2.5rem', color: 'var(--accent)', marginBottom: '16px', opacity: 0.8 }}>{title}</h2>
+      <p>Выберите чат или найдите кого-нибудь в поиске</p>
+    </div>
+  )
+}
+
 export default function App() {
   const { session, setSession, profile, setProfile } = useStore()
   const [loading, setLoading] = useState(true)
@@ -66,11 +79,7 @@ export default function App() {
           <Route path="*" element={<Auth />} />
         ) : (
           <Route path="/" element={<ChatLayout />}>
-            <Route index element={
-              <div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-secondary)' }}>
-                Выберите чат или начните новый диалог
-              </div>
-            } />
+            <Route index element={<EmptyState />} />
             <Route path="chat/:chatId" element={<ChatRoom />} />
             <Route path="profile/:userId" element={<Profile />} />
             <Route path="settings" element={<Settings />} />
