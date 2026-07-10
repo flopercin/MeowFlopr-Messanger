@@ -26,6 +26,7 @@ const resources = {
       "about": "About me",
       "about_placeholder": "Write something about yourself...",
       "no_description": "Nothing here yet",
+      "hide_last_seen": "Hide last seen time ('seen recently')",
       
       "search_placeholder": "Search ID or username...",
       "search": "Search",
@@ -39,6 +40,8 @@ const resources = {
       "username_optional": "Username (optional)",
       "cancel": "Cancel",
       "create": "Create",
+      "pin": "Pin to top",
+      "unpin": "Unpin",
       
       "select_chat_or_search": "Select a chat or find someone in search",
       
@@ -48,7 +51,20 @@ const resources = {
       "type_message": "Type a message...",
       "channel_readonly": "Only administrators can post in this channel.",
       "saved_messages_empty": "You can save links, files, and notes here.",
-      "no_messages": "No messages here yet."
+      "no_messages": "No messages here yet.",
+      
+      "typing": "is typing...",
+      "online": "online",
+      "last_seen_recently": "last seen recently",
+      "last_seen": "last seen",
+      "today": "today",
+      "at": "at",
+      "someone": "Someone",
+      "edited": "edited",
+      "edit": "Edit",
+      "delete": "Delete",
+      "confirm_delete": "Are you sure you want to delete this message?",
+      "edit_message": "Editing message"
     }
   },
   ru: {
@@ -75,6 +91,7 @@ const resources = {
       "about": "О себе",
       "about_placeholder": "Напишите что-нибудь о себе...",
       "no_description": "Ничего не указано",
+      "hide_last_seen": "Скрывать время в сети (\"был(а) недавно\")",
       
       "search_placeholder": "Поиск ID или username...",
       "search": "Поиск",
@@ -88,6 +105,8 @@ const resources = {
       "username_optional": "Юзернейм (необязательно)",
       "cancel": "Отмена",
       "create": "Создать",
+      "pin": "Закрепить",
+      "unpin": "Открепить",
       
       "select_chat_or_search": "Выберите чат или найдите кого-нибудь в поиске",
       
@@ -97,7 +116,20 @@ const resources = {
       "type_message": "Напишите сообщение...",
       "channel_readonly": "Только администраторы могут писать в этот канал.",
       "saved_messages_empty": "Здесь вы можете сохранять ссылки, файлы и заметки.",
-      "no_messages": "Здесь пока нет сообщений."
+      "no_messages": "Здесь пока нет сообщений.",
+      
+      "typing": "печатает...",
+      "online": "в сети",
+      "last_seen_recently": "был(а) недавно",
+      "last_seen": "был(а)",
+      "today": "сегодня",
+      "at": "в",
+      "someone": "Кто-то",
+      "edited": "изменено",
+      "edit": "Редактировать",
+      "delete": "Удалить",
+      "confirm_delete": "Точно удалить сообщение?",
+      "edit_message": "Редактирование"
     }
   }
 }
