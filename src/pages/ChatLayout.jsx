@@ -16,7 +16,6 @@ export default function ChatLayout() {
   const [searchResults, setSearchResults] = useState([])
   const [showGroupModal, setShowGroupModal] = useState(false)
   
-  // Group creation state
   const [groupName, setGroupName] = useState('')
   const [groupUsername, setGroupUsername] = useState('')
   const [groupType, setGroupType] = useState('group')
@@ -25,8 +24,22 @@ export default function ChatLayout() {
   const isMobileMainView = location.pathname !== '/'
 
   useEffect(() => {
-    if (profile) loadChats()
-  }, [profile, location.pathname])
+    if (!profile) return
+    loadChats()
+
+    // Слушаем изменения в таблицах, чтобы список чатов обновлялся сам!
+    const chatSub = supabase
+      .channel('chat_list_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_participants' }, () => {
+        loadChats() // Перезагружаем список, если нас добавили в чат
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, () => {
+        loadChats() // Перезагружаем, если поменялось название/аватарка
+      })
+      .subscribe()
+
+    return () => supabase.removeChannel(chatSub)
+  }, [profile])
 
   const loadChats = async () => {
     try {
@@ -42,27 +55,33 @@ export default function ChatLayout() {
       }
 
       const chatIds = participants.map(p => p.chat_id)
-      const { data: allParticipants } = await supabase
+      
+      const { data: allParticipants, error: allPError } = await supabase
         .from('chat_participants')
         .select('chat_id, user_id, profiles(display_name, username, avatar_url)')
         .in('chat_id', chatIds)
+
+      if (allPError) throw allPError
 
       const formattedChats = participants.map(p => {
         const chatInfo = p.chats
         if (!chatInfo) return null
         
         if (chatInfo.type === 'direct') {
+          // Ищем собеседника. Если его нет в allParticipants, значит это чат с самим собой
           const otherUser = allParticipants?.find(ap => ap.chat_id === chatInfo.id && ap.user_id !== profile.id)
-          if (otherUser) {
+          
+          if (otherUser && otherUser.profiles) {
             return {
               id: chatInfo.id,
-              name: otherUser.profiles?.display_name || 'User',
-              username: otherUser.profiles?.username,
-              avatar: otherUser.profiles?.avatar_url,
+              name: otherUser.profiles.display_name || 'User',
+              username: otherUser.profiles.username,
+              avatar: otherUser.profiles.avatar_url,
               isDirect: true,
               updated_at: chatInfo.updated_at
             }
           } else {
+            // Либо Избранное (если других нет), либо профиль собеседника не загрузился
             return {
               id: chatInfo.id,
               name: t('saved_messages', 'Избранное'),
@@ -83,11 +102,11 @@ export default function ChatLayout() {
             updated_at: chatInfo.updated_at
           }
         }
-      }).filter(Boolean).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+      }).filter(Boolean).sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
 
       setChats(formattedChats)
     } catch (err) {
-      console.error("Error loading chats:", err)
+      console.error("Ошибка загрузки списка чатов:", err)
     }
   }
 
@@ -136,7 +155,6 @@ export default function ChatLayout() {
         return
       }
 
-      // Генерация ID на клиенте обходит ошибку RLS
       const newId = crypto.randomUUID()
       
       const { error: chatError } = await supabase.from('chats').insert([{ id: newId, type: 'direct' }])
@@ -153,7 +171,7 @@ export default function ChatLayout() {
       navigate(`/chat/${newId}`)
       setSearchQuery('')
       setSearchResults([])
-      loadChats()
+      // loadChats() вызовется автоматически благодаря Realtime подписке
     } catch (error) {
       console.error(error)
       alert(t('error', 'Ошибка: ') + error.message)
@@ -199,7 +217,6 @@ export default function ChatLayout() {
       setShowGroupModal(false)
       setGroupName('')
       setGroupUsername('')
-      loadChats()
       navigate(`/chat/${newId}`)
     } catch (error) {
       setCreationError(error.message)
