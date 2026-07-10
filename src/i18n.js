@@ -64,7 +64,10 @@ const resources = {
       "edit": "Edit",
       "delete": "Delete",
       "confirm_delete": "Are you sure you want to delete this message?",
-      "edit_message": "Editing message"
+      "edit_message": "Editing message",
+      "search_messages": "Search messages...",
+      "chat_created": "Chat created",
+      "nothing_found": "Nothing found"
     }
   },
   ru: {
@@ -129,7 +132,10 @@ const resources = {
       "edit": "Редактировать",
       "delete": "Удалить",
       "confirm_delete": "Точно удалить сообщение?",
-      "edit_message": "Редактирование"
+      "edit_message": "Редактирование",
+      "search_messages": "Поиск сообщений...",
+      "chat_created": "Чат создан",
+      "nothing_found": "Ничего не найдено"
     }
   }
 }

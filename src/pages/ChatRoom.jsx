@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useOutletContext } from 'react-router-dom
 import { supabase } from '../supabaseClient'
 import useStore from '../store'
 import imageCompression from 'browser-image-compression'
-import { Send, User, ChevronLeft, Paperclip, X, File, Bookmark, Check, CheckCheck, Edit2, Trash2 } from 'lucide-react'
+import { Send, User, ChevronLeft, Paperclip, X, File, Bookmark, Check, CheckCheck, Edit2, Trash2, Search as SearchIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 export default function ChatRoom() {
@@ -22,11 +22,16 @@ export default function ChatRoom() {
   
   const [editingMsg, setEditingMsg] = useState(null)
   const [typingUsers, setTypingUsers] = useState(new Set())
-  const typingTimeoutRef = useRef(null)
   
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  
+  const typingTimeoutRef = useRef(null)
   const messagesEndRef = useRef(null)
   const fileInputRef = useRef(null)
   const inputRef = useRef(null)
+  
+  const scrollContainerRef = useRef(null)
 
   useEffect(() => {
     if (!chatId || !profile) return
@@ -38,6 +43,8 @@ export default function ChatRoom() {
     
     setAttachment(null)
     setEditingMsg(null)
+    setIsSearching(false)
+    setSearchQuery('')
     loadChatInfo()
     loadMessages()
 
@@ -86,9 +93,12 @@ export default function ChatRoom() {
     }
   }, [chatId, profile])
 
+  // Умный скролл вниз
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight
+    }
+  }, [messages.length]) // Скроллит только при изменении количества сообщений
 
   const loadChatInfo = async () => {
     const { data: chatData } = await supabase.from('chats').select('*').eq('id', chatId).single()
@@ -99,12 +109,12 @@ export default function ChatRoom() {
       const otherUser = participants?.find(p => p.user_id !== profile.id)
       
       if (otherUser && otherUser.profiles) {
-        setChatInfo({ isDirect: true, other_user_id: otherUser.user_id, ...otherUser.profiles })
+        setChatInfo({ isDirect: true, other_user_id: otherUser.user_id, ...otherUser.profiles, chat_created_at: chatData.created_at })
       } else {
-        setChatInfo({ isDirect: true, isSaved: true, display_name: t('saved_messages', 'Избранное'), id: profile.id })
+        setChatInfo({ isDirect: true, isSaved: true, display_name: t('saved_messages', 'Избранное'), id: profile.id, chat_created_at: chatData.created_at })
       }
     } else {
-      setChatInfo({ isDirect: false, ...chatData })
+      setChatInfo({ isDirect: false, ...chatData, chat_created_at: chatData.created_at })
     }
   }
 
@@ -161,7 +171,6 @@ export default function ChatRoom() {
   const handleTyping = (e) => {
     setNewMessage(e.target.value)
     
-    // Broadcast typing
     const typingChannel = supabase.channel(`typing_${chatId}`)
     typingChannel.track({ user: profile.id, name: profile.display_name })
     
@@ -246,7 +255,6 @@ export default function ChatRoom() {
 
   const canWrite = chatInfo.type !== 'channel' || chatInfo.admin_id === profile.id
   
-  // Онлайн статус логика
   const isOnline = chatInfo.isDirect && !chatInfo.isSaved && onlineUsers.has(chatInfo.other_user_id)
   const isTyping = typingUsers.size > 0
   
@@ -287,105 +295,152 @@ export default function ChatRoom() {
     )
   }
 
+  const filteredMessages = isSearching && searchQuery.trim() 
+    ? messages.filter(m => (m.text || '').toLowerCase().includes(searchQuery.toLowerCase()))
+    : messages
+
   return (
     <>
       <div className="topbar">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button className="btn-icon ripple d-md-none" onClick={() => navigate('/')} style={{ marginLeft: '-10px' }}>
-            <ChevronLeft size={24} />
-          </button>
-          
-          <div style={{ position: 'relative' }}>
-            {chatInfo.isSaved ? (
-               <div className="avatar avatar-sm" style={{ display:'flex', alignItems:'center', justifyContent:'center', background:'var(--accent)' }}><Bookmark size={20} color="white" /></div>
-            ) : chatInfo.isDirect ? (
-              <img src={chatInfo.avatar_url || `https://ui-avatars.com/api/?name=${chatInfo.display_name}`} className="avatar avatar-sm" />
-            ) : (
-              <div className="avatar avatar-sm" style={{ display:'flex', alignItems:'center', justifyContent:'center', background:'var(--bg-secondary)' }}><User size={20} color="var(--accent)" /></div>
-            )}
-            {isOnline && <div style={{ position: 'absolute', bottom: 0, right: 0, width: '12px', height: '12px', background: '#10b981', borderRadius: '50%', border: '2px solid var(--bg-glass)' }}/>}
+        {isSearching ? (
+          <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '10px' }}>
+            <button className="btn-icon ripple" onClick={() => { setIsSearching(false); setSearchQuery(''); }}><ChevronLeft size={24} /></button>
+            <input 
+              type="text" 
+              autoFocus
+              className="message-input" 
+              placeholder={t('search_messages', 'Поиск сообщений...')} 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ flex: 1, padding: '8px 12px', minHeight: 'auto' }}
+            />
           </div>
-          
-          <div>
-            <strong style={{ fontSize: '1.1rem', display: 'block', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatInfo.display_name || chatInfo.name}</strong>
-            <span style={{ fontSize: '0.75rem', color: isOnline || isTyping ? '#10b981' : 'var(--text-secondary)', transition: 'color 0.3s' }}>
-              {statusText}
-            </span>
-          </div>
-        </div>
-        
-        {chatInfo.isDirect && !chatInfo.isSaved && (
-          <Link to={`/profile/${chatInfo.id}`} className="btn-icon ripple" title={t('profile', 'Профиль')}>
-            <User size={20} />
-          </Link>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <button className="btn-icon ripple d-md-none" onClick={() => navigate('/')} style={{ marginLeft: '-10px' }}>
+                <ChevronLeft size={24} />
+              </button>
+              
+              <div style={{ position: 'relative' }}>
+                {chatInfo.isSaved ? (
+                   <div className="avatar avatar-sm" style={{ display:'flex', alignItems:'center', justifyContent:'center', background:'var(--accent)' }}><Bookmark size={20} color="white" /></div>
+                ) : chatInfo.isDirect ? (
+                  <img src={chatInfo.avatar_url || `https://ui-avatars.com/api/?name=${chatInfo.display_name}`} className="avatar avatar-sm" />
+                ) : (
+                  <div className="avatar avatar-sm" style={{ display:'flex', alignItems:'center', justifyContent:'center', background:'var(--bg-secondary)' }}><User size={20} color="var(--accent)" /></div>
+                )}
+                {isOnline && <div style={{ position: 'absolute', bottom: 0, right: 0, width: '12px', height: '12px', background: '#10b981', borderRadius: '50%', border: '2px solid var(--bg-glass)' }}/>}
+              </div>
+              
+              <div>
+                <strong style={{ fontSize: '1.1rem', display: 'block', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{chatInfo.display_name || chatInfo.name}</strong>
+                <span style={{ fontSize: '0.75rem', color: isOnline || isTyping ? '#10b981' : 'var(--text-secondary)', transition: 'color 0.3s' }}>
+                  {statusText}
+                </span>
+              </div>
+            </div>
+            
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <button className="btn-icon ripple" onClick={() => setIsSearching(true)}><SearchIcon size={20} /></button>
+              {chatInfo.isDirect && !chatInfo.isSaved && (
+                <Link to={`/profile/${chatInfo.id}`} className="btn-icon ripple" title={t('profile', 'Профиль')}>
+                  <User size={20} />
+                </Link>
+              )}
+            </div>
+          </>
         )}
       </div>
 
-      <div className="messages-wrapper">
-        {messages.length === 0 ? (
+      <div className="messages-wrapper" ref={scrollContainerRef}>
+        {chatInfo.chat_created_at && !isSearching && (
+          <div style={{ textAlign: 'center', margin: '20px 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            <span style={{ background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: '12px' }}>
+              {t('chat_created', 'Чат создан')} {new Date(chatInfo.chat_created_at).toLocaleDateString()}
+            </span>
+          </div>
+        )}
+      
+        {filteredMessages.length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '40px' }}>
-            {chatInfo.isSaved ? t('saved_messages_empty', 'Здесь вы можете сохранять ссылки, файлы и заметки.') : t('no_messages', 'Здесь пока нет сообщений.')}
+            {isSearching ? t('nothing_found', 'Ничего не найдено') : (chatInfo.isSaved ? t('saved_messages_empty', 'Здесь вы можете сохранять ссылки, файлы и заметки.') : t('no_messages', 'Здесь пока нет сообщений.'))}
           </div>
         ) : (
-          messages.map((msg, index) => {
+          filteredMessages.map((msg, index) => {
             const isMine = msg.user_id === profile.id
-            const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            const showAuthor = !isMine && !chatInfo.isDirect && (index === 0 || messages[index - 1].user_id !== msg.user_id)
+            const msgDateObj = new Date(msg.created_at)
+            const time = msgDateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            const msgDateStr = msgDateObj.toLocaleDateString()
+            
+            // Разделитель дат
+            const prevMsg = index > 0 ? filteredMessages[index - 1] : null
+            const prevDateStr = prevMsg ? new Date(prevMsg.created_at).toLocaleDateString() : null
+            const showDateDivider = !isSearching && prevDateStr !== msgDateStr
+            
+            const showAuthor = !isMine && !chatInfo.isDirect && (!prevMsg || prevMsg.user_id !== msg.user_id || showDateDivider)
             const isRead = (msg.read_by || []).length > 0
             
             return (
-              <div 
-                key={msg.id} 
-                className={`bubble ${isMine ? 'mine' : 'other'}`}
-                onMouseEnter={() => setHoveredMsgId(msg.id)}
-                onMouseLeave={() => setHoveredMsgId(null)}
-                style={{ position: 'relative' }}
-              >
-                {showAuthor && <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px', fontWeight: 'bold' }}>{msg.profiles?.display_name}</div>}
-                
-                {msg.attachment_url && (
-                  <div style={{ marginBottom: msg.text ? '8px' : '0' }}>
-                    {msg.attachment_type === 'image' && <img src={msg.attachment_url} className="attachment-img" alt="attachment" onClick={() => window.open(msg.attachment_url)} />}
-                    {msg.attachment_type === 'video' && <video src={msg.attachment_url} className="attachment-video" controls />}
-                    {msg.attachment_type === 'file' && (
-                      <a href={msg.attachment_url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'inherit', textDecoration: 'none', background: 'rgba(0,0,0,0.1)', padding: '10px', borderRadius: '8px' }}>
-                        <File size={20} /> <span style={{ wordBreak: 'break-all' }}>{msg.attachment_name || 'Скачать файл'}</span>
-                      </a>
-                    )}
+              <React.Fragment key={msg.id}>
+                {showDateDivider && (
+                  <div style={{ textAlign: 'center', margin: '24px 0 16px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                    <span style={{ background: 'var(--bg-secondary)', padding: '4px 12px', borderRadius: '12px' }}>
+                      {msgDateStr === new Date().toLocaleDateString() ? t('today', 'Сегодня') : msgDateStr}
+                    </span>
                   </div>
                 )}
-                
-                {msg.text && <div>{msg.text}</div>}
-                
-                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                  {msg.is_edited && <span style={{ fontSize: '0.65rem', opacity: 0.6, fontStyle: 'italic', marginRight: '4px' }}>{t('edited', 'изменено')}</span>}
-                  <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{time}</div>
-                  {isMine && !chatInfo.isSaved && (
-                    <div style={{ color: isRead ? '#3b82f6' : 'inherit', opacity: isRead ? 1 : 0.6, display: 'flex' }}>
-                      {isRead ? <CheckCheck size={14} /> : <Check size={14} />}
+                <div 
+                  className={`bubble ${isMine ? 'mine' : 'other'}`}
+                  onMouseEnter={() => setHoveredMsgId(msg.id)}
+                  onMouseLeave={() => setHoveredMsgId(null)}
+                  style={{ position: 'relative' }}
+                >
+                  {showAuthor && <div style={{ fontSize: '0.75rem', color: 'var(--accent)', marginBottom: '4px', fontWeight: 'bold' }}>{msg.profiles?.display_name}</div>}
+                  
+                  {msg.attachment_url && (
+                    <div style={{ marginBottom: msg.text ? '8px' : '0' }}>
+                      {msg.attachment_type === 'image' && <img src={msg.attachment_url} className="attachment-img" alt="attachment" onClick={() => window.open(msg.attachment_url)} />}
+                      {msg.attachment_type === 'video' && <video src={msg.attachment_url} className="attachment-video" controls />}
+                      {msg.attachment_type === 'file' && (
+                        <a href={msg.attachment_url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'inherit', textDecoration: 'none', background: 'rgba(0,0,0,0.1)', padding: '10px', borderRadius: '8px' }}>
+                          <File size={20} /> <span style={{ wordBreak: 'break-all' }}>{msg.attachment_name || 'Скачать файл'}</span>
+                        </a>
+                      )}
                     </div>
                   )}
-                </div>
-
-                {renderReactions(msg.reactions)}
-
-                {/* Reaction & Action Menu */}
-                {hoveredMsgId === msg.id && (
-                  <div style={{ position: 'absolute', top: '-40px', [isMine ? 'right' : 'left']: '0', background: 'var(--bg-glass)', backdropFilter: 'blur(10px)', padding: '4px 8px', borderRadius: '20px', display: 'flex', gap: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', zIndex: 10 }}>
-                    {['👍', '❤️', '😂', '😢', '🔥'].map(emoji => (
-                      <button key={emoji} className="btn-icon ripple" style={{ padding: '4px', fontSize: '1.2rem', width: 'auto', height: 'auto' }} onClick={() => toggleReaction(msg, emoji)}>
-                        {emoji}
-                      </button>
-                    ))}
-                    {isMine && (
-                      <div style={{ display: 'flex', borderLeft: '1px solid var(--border-color)', paddingLeft: '8px', gap: '4px' }}>
-                        {msg.text && <button className="btn-icon ripple" style={{ padding: '4px', width: 'auto', height: 'auto', color: 'var(--accent)' }} onClick={() => startEditing(msg)} title={t('edit', 'Редактировать')}><Edit2 size={18} /></button>}
-                        <button className="btn-icon ripple" style={{ padding: '4px', width: 'auto', height: 'auto', color: '#ef4444' }} onClick={() => deleteMessage(msg.id)} title={t('delete', 'Удалить')}><Trash2 size={18} /></button>
+                  
+                  {msg.text && <div>{msg.text}</div>}
+                  
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+                    {msg.is_edited && <span style={{ fontSize: '0.65rem', opacity: 0.6, fontStyle: 'italic', marginRight: '4px' }}>{t('edited', 'изменено')}</span>}
+                    <div style={{ fontSize: '0.65rem', opacity: 0.7 }}>{time}</div>
+                    {isMine && !chatInfo.isSaved && (
+                      <div style={{ color: isRead ? '#3b82f6' : 'inherit', opacity: isRead ? 1 : 0.6, display: 'flex' }}>
+                        {isRead ? <CheckCheck size={14} /> : <Check size={14} />}
                       </div>
                     )}
                   </div>
-                )}
-              </div>
+
+                  {renderReactions(msg.reactions)}
+
+                  {hoveredMsgId === msg.id && (
+                    <div style={{ position: 'absolute', top: '-40px', [isMine ? 'right' : 'left']: '0', background: 'var(--bg-glass)', backdropFilter: 'blur(10px)', padding: '4px 8px', borderRadius: '20px', display: 'flex', gap: '8px', boxShadow: '0 4px 15px rgba(0,0,0,0.15)', border: '1px solid var(--border-color)', zIndex: 10 }}>
+                      {['👍', '❤️', '😂', '😢', '🔥'].map(emoji => (
+                        <button key={emoji} className="btn-icon ripple" style={{ padding: '4px', fontSize: '1.2rem', width: 'auto', height: 'auto' }} onClick={() => toggleReaction(msg, emoji)}>
+                          {emoji}
+                        </button>
+                      ))}
+                      {isMine && (
+                        <div style={{ display: 'flex', borderLeft: '1px solid var(--border-color)', paddingLeft: '8px', gap: '4px' }}>
+                          {msg.text && <button className="btn-icon ripple" style={{ padding: '4px', width: 'auto', height: 'auto', color: 'var(--accent)' }} onClick={() => startEditing(msg)} title={t('edit', 'Редактировать')}><Edit2 size={18} /></button>}
+                          <button className="btn-icon ripple" style={{ padding: '4px', width: 'auto', height: 'auto', color: '#ef4444' }} onClick={() => deleteMessage(msg.id)} title={t('delete', 'Удалить')}><Trash2 size={18} /></button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </React.Fragment>
             )
           })
         )}

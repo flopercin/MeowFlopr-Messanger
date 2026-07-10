@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useOutletContext } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import useStore from '../store'
 import imageCompression from 'browser-image-compression'
@@ -11,6 +11,11 @@ export default function Profile() {
   const { userId } = useParams()
   const navigate = useNavigate()
   const { profile: currentUserProfile, setProfile: setCurrentUserProfile } = useStore()
+  
+  // Получаем онлайн пользователей из ChatLayout (если профиль открыт внутри него)
+  const outletContext = useOutletContext()
+  const onlineUsers = outletContext?.onlineUsers || new Set()
+
   
   const [profileData, setProfileData] = useState(null)
   const [isEditing, setIsEditing] = useState(false)
@@ -105,7 +110,9 @@ export default function Profile() {
   if (!profileData) return <div style={{ padding: '24px' }}>{t('loading', 'Загрузка...')}</div>
 
   let statusText = ''
-  if (profileData.hide_last_seen && !isMe) {
+  if (!isMe && onlineUsers.has(userId)) {
+    statusText = t('online', 'в сети')
+  } else if (profileData.hide_last_seen && !isMe) {
     statusText = t('last_seen_recently', 'был(а) недавно')
   } else if (profileData.last_seen) {
     const date = new Date(profileData.last_seen)
@@ -143,7 +150,7 @@ export default function Profile() {
           )}
         </div>
         
-        <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '24px' }}>
+        <div style={{ color: (!isMe && onlineUsers.has(userId)) ? '#10b981' : 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '24px' }}>
           {statusText}
         </div>
 
