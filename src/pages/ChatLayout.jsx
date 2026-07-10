@@ -45,7 +45,7 @@ export default function ChatLayout() {
     try {
       const { data: participants, error: pError } = await supabase
         .from('chat_participants')
-        .select('chat_id, chats(id, type, name, avatar_url, updated_at, username)')
+        .select('chat_id, chats(id, type, name, avatar_url, created_at, username)')
         .eq('user_id', profile.id)
 
       if (pError) throw pError
@@ -78,7 +78,7 @@ export default function ChatLayout() {
               username: otherUser.profiles.username,
               avatar: otherUser.profiles.avatar_url,
               isDirect: true,
-              updated_at: chatInfo.updated_at
+              created_at: chatInfo.created_at
             }
           } else {
             // Либо Избранное (если других нет), либо профиль собеседника не загрузился
@@ -89,7 +89,7 @@ export default function ChatLayout() {
               avatar: null,
               isDirect: true,
               isSaved: true,
-              updated_at: chatInfo.updated_at
+              created_at: chatInfo.created_at
             }
           }
         } else {
@@ -99,10 +99,10 @@ export default function ChatLayout() {
             username: chatInfo.username ? `@${chatInfo.username}` : chatInfo.type,
             avatar: chatInfo.avatar_url,
             isDirect: false,
-            updated_at: chatInfo.updated_at
+            created_at: chatInfo.created_at
           }
         }
-      }).filter(Boolean).sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
+      }).filter(Boolean).sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
 
       setChats(formattedChats)
     } catch (err) {
